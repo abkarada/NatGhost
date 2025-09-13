@@ -36,6 +36,14 @@ struct PacketMeasurement {
     bool success;
 };
 
+// Forward declarations
+struct PortPrediction {
+    uint16_t predicted_port;
+    double confidence;
+    std::string method;
+    int steps_ahead;
+};
+
 class AdvancedNATAnalyzer {
 private:
     std::vector<PacketMeasurement> measurements;
@@ -781,6 +789,454 @@ public:
         }
     }
     
+    // ====================== PORT PREDICTION AND EXPLOITATION ======================
+    
+    std::vector<PortPrediction> predict_next_ports(int count = 10) {
+        std::vector<PortPrediction> predictions;
+        
+        if (measurements.size() < 5) {
+            std::cout << "❌ Insufficient data for prediction" << std::endl;
+            return predictions;
+        }
+        
+        std::cout << "\n🔮 PORT PREDICTION ENGINE" << std::endl;
+        std::cout << "=" << std::string(50, '=') << std::endl;
+        
+        // Method 1: Markov Chain Prediction
+        auto markov_predictions = predict_using_markov_chain(count);
+        predictions.insert(predictions.end(), markov_predictions.begin(), markov_predictions.end());
+        
+        // Method 2: Delta Pattern Prediction  
+        auto delta_predictions = predict_using_delta_patterns(count);
+        predictions.insert(predictions.end(), delta_predictions.begin(), delta_predictions.end());
+        
+        // Method 3: LFSR State Prediction
+        auto lfsr_predictions = predict_using_lfsr_state(count);
+        predictions.insert(predictions.end(), lfsr_predictions.begin(), lfsr_predictions.end());
+        
+        return predictions;
+    }
+    
+    std::vector<PortPrediction> predict_using_markov_chain(int count) {
+        std::vector<PortPrediction> predictions;
+        
+        // Build Markov transition table
+        std::map<uint8_t, std::map<uint8_t, int>> transitions;
+        
+        for (size_t i = 1; i < measurements.size(); ++i) {
+            uint8_t from_state = measurements[i-1].assigned_port & 0xFF;
+            uint8_t to_state = measurements[i].assigned_port & 0xFF;
+            transitions[from_state][to_state]++;
+        }
+        
+        // Start from last observed port
+        uint16_t current_port = measurements.back().assigned_port;
+        uint8_t current_state = current_port & 0xFF;
+        
+        std::cout << "🔗 Markov Chain Predictions:" << std::endl;
+        
+        for (int i = 0; i < count; ++i) {
+            if (transitions.find(current_state) != transitions.end()) {
+                // Find most probable next state
+                int max_count = 0;
+                uint8_t next_state = 0;
+                int total_transitions = 0;
+                
+                for (const auto& [next, count] : transitions[current_state]) {
+                    total_transitions += count;
+                    if (count > max_count) {
+                        max_count = count;
+                        next_state = next;
+                    }
+                }
+                
+                if (max_count > 0) {
+                    double confidence = (double)max_count / total_transitions;
+                    
+                    // Reconstruct full port (keep high bytes from current)
+                    uint16_t predicted_port = (current_port & 0xFF00) | next_state;
+                    
+                    PortPrediction pred;
+                    pred.predicted_port = predicted_port;
+                    pred.confidence = confidence;
+                    pred.method = "Markov";
+                    pred.steps_ahead = i + 1;
+                    
+                    predictions.push_back(pred);
+                    
+                    std::cout << "   Step " << (i+1) << ": Port " << predicted_port 
+                              << " (confidence: " << std::fixed << std::setprecision(3) 
+                              << confidence << ")" << std::endl;
+                    
+                    current_port = predicted_port;
+                    current_state = next_state;
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+        
+        return predictions;
+    }
+    
+    std::vector<PortPrediction> predict_using_delta_patterns(int count) {
+        std::vector<PortPrediction> predictions;
+        
+        if (measurements.size() < 3) return predictions;
+        
+        std::cout << "\n📊 Delta Pattern Predictions:" << std::endl;
+        
+        // Analyze recent delta patterns
+        std::vector<int32_t> recent_deltas;
+        size_t start = std::max(0, (int)measurements.size() - 10);
+        
+        for (size_t i = start + 1; i < measurements.size(); ++i) {
+            int32_t delta = (int32_t)measurements[i].assigned_port - (int32_t)measurements[i-1].assigned_port;
+            recent_deltas.push_back(delta);
+        }
+        
+        if (recent_deltas.empty()) return predictions;
+        
+        // Method A: Repeating delta pattern
+        if (recent_deltas.size() >= 4) {
+            bool pattern_found = false;
+            for (size_t pattern_len = 1; pattern_len <= recent_deltas.size()/2; ++pattern_len) {
+                bool is_repeating = true;
+                for (size_t i = pattern_len; i < recent_deltas.size(); ++i) {
+                    if (recent_deltas[i] != recent_deltas[i % pattern_len]) {
+                        is_repeating = false;
+                        break;
+                    }
+                }
+                
+                if (is_repeating) {
+                    uint16_t current_port = measurements.back().assigned_port;
+                    
+                    for (int i = 0; i < count; ++i) {
+                        int32_t next_delta = recent_deltas[i % pattern_len];
+                        uint16_t predicted_port = (uint16_t)(current_port + next_delta);
+                        
+                        PortPrediction pred;
+                        pred.predicted_port = predicted_port;
+                        pred.confidence = 0.8;  // High confidence for repeating patterns
+                        pred.method = "DeltaPattern";
+                        pred.steps_ahead = i + 1;
+                        
+                        predictions.push_back(pred);
+                        
+                        std::cout << "   Step " << (i+1) << ": Port " << predicted_port 
+                                  << " (delta: " << next_delta << ")" << std::endl;
+                        
+                        current_port = predicted_port;
+                    }
+                    
+                    pattern_found = true;
+                    break;
+                }
+            }
+            
+            if (!pattern_found) {
+                // Method B: Average delta prediction
+                double avg_delta = std::accumulate(recent_deltas.begin(), recent_deltas.end(), 0.0) / recent_deltas.size();
+                uint16_t current_port = measurements.back().assigned_port;
+                
+                std::cout << "   Using average delta: " << avg_delta << std::endl;
+                
+                for (int i = 0; i < std::min(count, 3); ++i) {
+                    uint16_t predicted_port = (uint16_t)(current_port + avg_delta * (i + 1));
+                    
+                    PortPrediction pred;
+                    pred.predicted_port = predicted_port;
+                    pred.confidence = 0.3;  // Lower confidence
+                    pred.method = "AvgDelta";
+                    pred.steps_ahead = i + 1;
+                    
+                    predictions.push_back(pred);
+                    
+                    std::cout << "   Step " << (i+1) << ": Port " << predicted_port << std::endl;
+                }
+            }
+        }
+        
+        return predictions;
+    }
+    
+    std::vector<PortPrediction> predict_using_lfsr_state(int count) {
+        std::vector<PortPrediction> predictions;
+        
+        std::cout << "\n🧮 LFSR State Predictions:" << std::endl;
+        
+        // Convert recent ports to bit sequence
+        std::vector<int> bit_sequence;
+        size_t start = std::max(0, (int)measurements.size() - 20);
+        
+        for (size_t i = start; i < measurements.size(); ++i) {
+            for (int j = 15; j >= 0; --j) {
+                bit_sequence.push_back((measurements[i].assigned_port >> j) & 1);
+            }
+        }
+        
+        if (bit_sequence.size() < 32) {
+            std::cout << "   Insufficient data for LFSR prediction" << std::endl;
+            return predictions;
+        }
+        
+        // Use simplified LFSR prediction
+        int complexity = berlekamp_massey(bit_sequence);
+        
+        if (complexity < bit_sequence.size() / 3) {
+            std::cout << "   LFSR complexity: " << complexity << " - attempting prediction" << std::endl;
+            
+            // Simple prediction: assume XOR of last few bits
+            for (int i = 0; i < std::min(count, 5); ++i) {
+                // Simplified LFSR: XOR last 4 bits
+                int next_bit = 0;
+                if (bit_sequence.size() >= 4) {
+                    next_bit = bit_sequence[bit_sequence.size()-1] ^ 
+                               bit_sequence[bit_sequence.size()-2] ^
+                               bit_sequence[bit_sequence.size()-3] ^ 
+                               bit_sequence[bit_sequence.size()-4];
+                }
+                
+                bit_sequence.push_back(next_bit);
+                
+                // Convert last 16 bits to port
+                if (bit_sequence.size() >= 16) {
+                    uint16_t predicted_port = 0;
+                    for (int j = 0; j < 16; ++j) {
+                        predicted_port = (predicted_port << 1) | bit_sequence[bit_sequence.size() - 16 + j];
+                    }
+                    
+                    PortPrediction pred;
+                    pred.predicted_port = predicted_port;
+                    pred.confidence = 0.5;
+                    pred.method = "LFSR";
+                    pred.steps_ahead = i + 1;
+                    
+                    predictions.push_back(pred);
+                    
+                    std::cout << "   Step " << (i+1) << ": Port " << predicted_port << std::endl;
+                }
+            }
+        } else {
+            std::cout << "   High LFSR complexity - no clear pattern" << std::endl;
+        }
+        
+        return predictions;
+    }
+    
+    bool execute_targeted_port_manipulation(uint16_t target_port, int max_attempts = 50) {
+        std::cout << "\n🎯 TARGETED PORT MANIPULATION" << std::endl;
+        std::cout << "=" << std::string(50, '=') << std::endl;
+        std::cout << "🎯 Target Port: " << target_port << std::endl;
+        std::cout << "🔄 Max Attempts: " << max_attempts << std::endl;
+        
+        // First, predict what ports we'll get with current strategy
+        auto predictions = predict_next_ports(max_attempts);
+        
+        // Check if target port is in predictions
+        for (const auto& pred : predictions) {
+            if (pred.predicted_port == target_port) {
+                std::cout << "🎉 TARGET PORT PREDICTED!" << std::endl;
+                std::cout << "   Method: " << pred.method << std::endl;
+                std::cout << "   Steps ahead: " << pred.steps_ahead << std::endl;
+                std::cout << "   Confidence: " << pred.confidence << std::endl;
+                
+                // Execute the exact number of requests needed
+                return execute_precise_sequence_to_target(target_port, pred.steps_ahead);
+            }
+        }
+        
+        // If not in direct predictions, try brute force with pattern awareness
+        std::cout << "⚠️  Target port not in direct predictions" << std::endl;
+        std::cout << "🔄 Attempting pattern-guided brute force..." << std::endl;
+        
+        return execute_pattern_guided_search(target_port, max_attempts);
+    }
+    
+    bool execute_precise_sequence_to_target(uint16_t target_port, int steps_needed) {
+        std::cout << "\n🎯 Executing precise sequence to reach target..." << std::endl;
+        
+        // We need to send exactly 'steps_needed' packets to reach target
+        for (int i = 0; i < steps_needed; ++i) {
+            int sock = socket(AF_INET, SOCK_DGRAM, 0);
+            if (sock < 0) continue;
+            
+            struct sockaddr_in source_addr, target_addr;
+            
+            // Bind to unique source port
+            memset(&source_addr, 0, sizeof(source_addr));
+            source_addr.sin_family = AF_INET;
+            source_addr.sin_addr.s_addr = INADDR_ANY;
+            source_addr.sin_port = htons(20000 + i);  // Different from analysis range
+            bind(sock, (struct sockaddr*)&source_addr, sizeof(source_addr));
+            
+            // Target address
+            memset(&target_addr, 0, sizeof(target_addr));
+            target_addr.sin_family = AF_INET;
+            target_addr.sin_port = htons(stun_port);
+            inet_pton(AF_INET, target_stun_server.c_str(), &target_addr.sin_addr);
+            
+            // Send STUN request
+            uint8_t buffer[20];
+            uint8_t trans_id[12];
+            for (int j = 0; j < 12; ++j) trans_id[j] = rand() & 0xFF;
+            create_stun_binding_request(buffer, trans_id);
+            
+            sendto(sock, buffer, 20, 0, (struct sockaddr*)&target_addr, sizeof(target_addr));
+            
+            // Check response
+            struct timeval timeout;
+            timeout.tv_sec = 1;
+            timeout.tv_usec = 0;
+            setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+            
+            uint8_t response[1500];
+            ssize_t bytes = recvfrom(sock, response, sizeof(response), 0, nullptr, nullptr);
+            
+            if (bytes >= 20) {
+                uint16_t assigned_port = parse_mapped_address(response, bytes);
+                std::cout << "   Step " << (i+1) << "/" << steps_needed << ": Got port " << assigned_port;
+                
+                if (assigned_port == target_port) {
+                    std::cout << " 🎉 TARGET HIT!" << std::endl;
+                    close(sock);
+                    return true;
+                }
+                std::cout << std::endl;
+            }
+            
+            close(sock);
+        }
+        
+        std::cout << "❌ Target port not reached in predicted sequence" << std::endl;
+        return false;
+    }
+    
+    bool execute_pattern_guided_search(uint16_t target_port, int max_attempts) {
+        std::cout << "\n🔍 Pattern-guided search for target port..." << std::endl;
+        
+        // Strategy: Use delta patterns to navigate toward target
+        uint16_t current_best = measurements.back().assigned_port;
+        int32_t distance_to_target = (int32_t)target_port - (int32_t)current_best;
+        
+        std::cout << "   Current port: " << current_best << std::endl;
+        std::cout << "   Distance to target: " << distance_to_target << std::endl;
+        
+        // Analyze which deltas have been observed
+        std::map<int32_t, int> delta_frequency;
+        for (size_t i = 1; i < measurements.size(); ++i) {
+            int32_t delta = (int32_t)measurements[i].assigned_port - (int32_t)measurements[i-1].assigned_port;
+            delta_frequency[delta]++;
+        }
+        
+        std::cout << "   Available deltas: ";
+        for (const auto& [delta, freq] : delta_frequency) {
+            std::cout << delta << "(" << freq << ") ";
+        }
+        std::cout << std::endl;
+        
+        // Smart delta selection: prefer deltas that get us closer to target
+        std::vector<std::pair<int32_t, int>> sorted_deltas;
+        for (const auto& [delta, freq] : delta_frequency) {
+            sorted_deltas.push_back({delta, freq});
+        }
+        
+        // Try to find combination of deltas that gets us close to target
+        for (int attempt = 0; attempt < max_attempts; ++attempt) {
+            int sock = socket(AF_INET, SOCK_DGRAM, 0);
+            if (sock < 0) continue;
+            
+            struct sockaddr_in source_addr, target_addr;
+            
+            // Smart source port selection based on needed delta
+            memset(&source_addr, 0, sizeof(source_addr));
+            source_addr.sin_family = AF_INET;
+            source_addr.sin_addr.s_addr = INADDR_ANY;
+            
+            // Calculate optimal delta needed
+            int32_t needed_delta = distance_to_target;
+            
+            // Find best available delta for this attempt
+            int32_t best_delta = 0;
+            int32_t min_diff = INT32_MAX;
+            
+            for (const auto& [delta, freq] : delta_frequency) {
+                int32_t diff = abs(needed_delta - delta);
+                if (diff < min_diff) {
+                    min_diff = diff;
+                    best_delta = delta;
+                }
+            }
+            
+            // Use source port to try to trigger the best delta
+            // Higher source ports tend to create positive deltas, lower negative
+            uint16_t src_port;
+            if (best_delta > 0) {
+                src_port = 30000 + (attempt % 1000) + abs(best_delta % 5000);
+            } else {
+                src_port = 25000 - (attempt % 1000) - abs(best_delta % 5000);
+            }
+            
+            source_addr.sin_port = htons(src_port);
+            bind(sock, (struct sockaddr*)&source_addr, sizeof(source_addr));
+            
+            // Target setup
+            memset(&target_addr, 0, sizeof(target_addr));
+            target_addr.sin_family = AF_INET;
+            target_addr.sin_port = htons(stun_port);
+            inet_pton(AF_INET, target_stun_server.c_str(), &target_addr.sin_addr);
+            
+            // Send request
+            uint8_t buffer[20];
+            uint8_t trans_id[12];
+            for (int j = 0; j < 12; ++j) trans_id[j] = rand() & 0xFF;
+            create_stun_binding_request(buffer, trans_id);
+            
+            sendto(sock, buffer, 20, 0, (struct sockaddr*)&target_addr, sizeof(target_addr));
+            
+            // Get response
+            struct timeval timeout;
+            timeout.tv_sec = 2;
+            timeout.tv_usec = 0;
+            setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+            
+            uint8_t response[1500];
+            ssize_t bytes = recvfrom(sock, response, sizeof(response), 0, nullptr, nullptr);
+            
+            if (bytes >= 20) {
+                uint16_t assigned_port = parse_mapped_address(response, bytes);
+                int32_t new_distance = abs((int32_t)target_port - (int32_t)assigned_port);
+                
+                std::cout << "   Attempt " << (attempt+1) << ": Port " << assigned_port 
+                          << " (distance: " << new_distance << ")";
+                
+                if (assigned_port == target_port) {
+                    std::cout << " 🎉 TARGET ACHIEVED!" << std::endl;
+                    close(sock);
+                    return true;
+                }
+                
+                if (new_distance < abs(distance_to_target)) {
+                    std::cout << " ✅ Getting closer!";
+                    current_best = assigned_port;
+                    distance_to_target = (int32_t)target_port - (int32_t)assigned_port;
+                }
+                
+                std::cout << std::endl;
+            }
+            
+            close(sock);
+        }
+        
+        std::cout << "❌ Target port not reached within " << max_attempts << " attempts" << std::endl;
+        std::cout << "   Best achieved: " << current_best << " (distance: " << abs(distance_to_target) << ")" << std::endl;
+        
+        return false;
+    }
+    
     void save_results_to_file() {
         std::string filename = "nat_analysis_results_" + 
                               std::to_string(std::chrono::duration_cast<std::chrono::seconds>(
@@ -815,12 +1271,14 @@ public:
 };
 
 int main(int argc, char* argv[]) {
-    std::cout << "🚀 Advanced NAT Pattern Analyzer v2.0" << std::endl;
-    std::cout << "High-Performance sendmmsg + C++ Pattern Analysis" << std::endl;
-    std::cout << "=" << std::string(50, '=') << std::endl;
+    std::cout << "🚀 Advanced NAT Pattern Analyzer & Port Manipulator v3.0" << std::endl;
+    std::cout << "High-Performance Analysis + Predictive Port Exploitation" << std::endl;
+    std::cout << "=" << std::string(60, '=') << std::endl;
     
     std::string stun_server = "stun.l.google.com";
     int packet_count = 100;
+    uint16_t target_port = 0;
+    std::string mode = "analyze";
     
     // Parse command line arguments
     if (argc > 1) {
@@ -829,25 +1287,104 @@ int main(int argc, char* argv[]) {
     if (argc > 2) {
         packet_count = std::atoi(argv[2]);
     }
+    if (argc > 3) {
+        std::string arg3 = argv[3];
+        if (arg3 == "predict") {
+            mode = "predict";
+        } else if (arg3.substr(0, 6) == "target") {
+            mode = "target";
+            if (arg3.length() > 7) {
+                target_port = std::atoi(arg3.substr(7).c_str());
+            }
+        } else {
+            target_port = std::atoi(arg3.c_str());
+            if (target_port > 0) mode = "target";
+        }
+    }
     
     std::cout << "📊 Configuration:" << std::endl;
     std::cout << "   STUN Server: " << stun_server << std::endl;
-    std::cout << "   Packet Count: " << packet_count << std::endl;
+    std::cout << "   Analysis Packets: " << packet_count << std::endl;
+    std::cout << "   Mode: " << mode << std::endl;
+    if (mode == "target") {
+        std::cout << "   Target Port: " << target_port << std::endl;
+    }
     std::cout << std::endl;
+    
+    if (mode != "target" && argc <= 3) {
+        std::cout << "💡 Usage modes:" << std::endl;
+        std::cout << "   ./analyzer [server] [packets]              - Analysis only" << std::endl;
+        std::cout << "   ./analyzer [server] [packets] predict      - Analysis + Prediction" << std::endl;
+        std::cout << "   ./analyzer [server] [packets] [target_port] - Analysis + Target port attack" << std::endl;
+        std::cout << "   ./analyzer [server] [packets] target:12345 - Analysis + Target port attack" << std::endl;
+        std::cout << std::endl;
+    }
     
     // Initialize analyzer
     AdvancedNATAnalyzer analyzer(stun_server);
     
-    // Execute measurement campaign
+    // Phase 1: Execute measurement campaign for pattern learning
+    std::cout << "🔍 PHASE 1: PATTERN LEARNING" << std::endl;
+    std::cout << "=" << std::string(40, '-') << std::endl;
     if (!analyzer.execute_high_performance_burst(packet_count)) {
         std::cerr << "❌ Failed to execute measurement burst" << std::endl;
         return 1;
     }
     
-    // Run comprehensive pattern analysis
+    // Phase 2: Run comprehensive pattern analysis
+    std::cout << "🧠 PHASE 2: PATTERN ANALYSIS" << std::endl;
+    std::cout << "=" << std::string(40, '-') << std::endl;
     analyzer.run_comprehensive_analysis();
     
-    std::cout << "\n✅ Analysis Complete!" << std::endl;
+    // Phase 3: Prediction and/or exploitation
+    if (mode == "predict" || mode == "target") {
+        std::cout << "🎯 PHASE 3: PREDICTIVE EXPLOITATION" << std::endl;
+        std::cout << "=" << std::string(40, '-') << std::endl;
+        
+        // Generate predictions
+        auto predictions = analyzer.predict_next_ports(20);
+        
+        if (predictions.empty()) {
+            std::cout << "❌ No predictions available" << std::endl;
+        } else {
+            std::cout << "\n📋 PREDICTION SUMMARY:" << std::endl;
+            std::cout << "=" << std::string(30, '-') << std::endl;
+            
+            // Group predictions by method
+            std::map<std::string, std::vector<PortPrediction>> grouped_predictions;
+            for (const auto& pred : predictions) {
+                grouped_predictions[pred.method].push_back(pred);
+            }
+            
+            for (const auto& [method, preds] : grouped_predictions) {
+                std::cout << "\n🔮 " << method << " Method:" << std::endl;
+                for (const auto& pred : preds) {
+                    std::cout << "   Step +" << pred.steps_ahead << ": Port " 
+                              << pred.predicted_port << " (conf: " 
+                              << std::fixed << std::setprecision(2) 
+                              << pred.confidence << ")" << std::endl;
+                }
+            }
+            
+            // Phase 4: Target port attack if requested
+            if (mode == "target" && target_port > 0) {
+                std::cout << "\n⚔️  PHASE 4: TARGET PORT ATTACK" << std::endl;
+                std::cout << "=" << std::string(40, '-') << std::endl;
+                
+                bool success = analyzer.execute_targeted_port_manipulation(target_port, 50);
+                
+                if (success) {
+                    std::cout << "\n🎉 SUCCESS! Target port " << target_port << " achieved!" << std::endl;
+                    std::cout << "🔓 NAT port manipulation successful!" << std::endl;
+                } else {
+                    std::cout << "\n⚠️  Target port attack incomplete" << std::endl;
+                    std::cout << "💡 Try different target port or increase attempts" << std::endl;
+                }
+            }
+        }
+    }
+    
+    std::cout << "\n✅ All phases complete!" << std::endl;
     std::cout << "Check output files for detailed results." << std::endl;
     
     return 0;
